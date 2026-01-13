@@ -10,6 +10,7 @@ import {
     GetOrganizationSettingsError,
     PostPayPaymentError,
     PayPayment,
+    PaymentStatus,
 } from "./types";
 import * as TE from "fp-ts/TaskEither"
 import { pipe } from "fp-ts/function"
@@ -123,7 +124,6 @@ const getUniqueOrganizationsIds = (invoices: Invoice[]): string[] => pipe(
     A.uniq(S.Eq),
 )
 
-// TIPAR RETURN
 const getOrganizations = (organizationsSettings: OrganizationSettings[]): Record<string, Currency> => pipe(
     organizationsSettings,
     A.map(({ organization_id, currency }) => [organization_id, currency] as const),
@@ -174,22 +174,32 @@ const removeAllInvoicesPaidPayments = (invoices: Invoice[]): Invoice[] => pipe(
     })),
 )
 
-// REFACTORIZAR LÓGICA EN PIPES
+const updatePaymentToPaid = (payment: Payment, discount: number): Payment => {
+    const amount = payment.amount - discount
+    return pipe(
+        amount,
+        O.fromPredicate((remainingAmount) => remainingAmount === 0),
+        O.map(() => "paid" as PaymentStatus),
+        O.getOrElse(() => payment.status),
+        (status) => ({
+            ...payment,
+            amount,
+            status,
+        }),
+    );
+}
+
 const applyDiscountToPayments = (payments: Payment[], discount: number): Payment[] => pipe(
     payments,
-    A.reduce({ remainingDiscount: discount, updatedPayments: [] as Payment[] }, ({ remainingDiscount, updatedPayments }, payment) => {
-        if (remainingDiscount === 0) return {
-            remainingDiscount,
-            updatedPayments: [...updatedPayments, payment],
-        }
+    A.reduce(
+        { remainingDiscount: discount, updatedPayments: [] as Payment[] }, 
+        ({ remainingDiscount, updatedPayments }, payment) => {
         const discountToApply = Math.min(remainingDiscount, payment.amount);
+        const updatedPayment = updatePaymentToPaid(payment, discountToApply);
+
         return {
             remainingDiscount: remainingDiscount - discountToApply,
-            updatedPayments: [...updatedPayments, {
-                ...payment,
-                status: payment.amount - discountToApply === 0 ? "paid" : payment.status,
-                amount: payment.amount - discountToApply,
-            }],
+            updatedPayments: [...updatedPayments, updatedPayment],
         };
     }),
     ({ updatedPayments }) => updatedPayments,

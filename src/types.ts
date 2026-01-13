@@ -1,4 +1,4 @@
-type PaymentStatus = "pending" | "paid";
+export type PaymentStatus = "pending" | "paid";
 
 export type Payment = {
     id: string,

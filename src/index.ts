@@ -1,12 +1,12 @@
-import axios from "axios";
-import { 
-    Invoices, 
-    Invoice, 
-    CreditNote, 
+import axios, { AxiosInstance } from "axios";
+import {
+    Invoices,
+    Invoice,
+    CreditNote,
     OrganizationSettings,
     Currency,
     Payment,
-    GetInvoicesError, 
+    GetInvoicesError,
     GetOrganizationSettingsError,
     PostPayPaymentError,
     PayPayment,
@@ -21,11 +21,20 @@ import * as Ord from "fp-ts/Ord";
 import * as N from "fp-ts/number";
 import * as O from "fp-ts/Option";
 
-const axiosClient = () => axios.create({
+const EXCHANGE_RATES: Record<string, number> = {
+    "USD->CLP": 900,
+    "CLP->USD": 1 / 900,
+    "MXN->CLP": 60,
+    "CLP->MXN": 1 / 60,
+    "USD->MXN": 15,
+    "MXN->USD": 1 / 15,
+}
+
+const axiosClient = (): AxiosInstance => axios.create({
     baseURL: "https://recruiting.data.bemmbo.com",
 })
 
-const getInvoicesTE = () => TE.tryCatch<GetInvoicesError, Invoices>(
+const getInvoicesTE = (): TE.TaskEither<GetInvoicesError, Invoices> => TE.tryCatch<GetInvoicesError, Invoices>(
     async () => {
         const client = axiosClient();
         const response = await client.get("/invoices/pending");
@@ -37,7 +46,7 @@ const getInvoicesTE = () => TE.tryCatch<GetInvoicesError, Invoices>(
     }),
 )
 
-const getOrganizationSettingsTE = (organization_id: string) => TE.tryCatch<GetOrganizationSettingsError, OrganizationSettings>(
+const getOrganizationSettingsTE = (organization_id: string): TE.TaskEither<GetOrganizationSettingsError, OrganizationSettings> => TE.tryCatch<GetOrganizationSettingsError, OrganizationSettings>(
     async () => {
         const client = axiosClient();
         const response = await client.get(`/organization/${organization_id}/settings`);
@@ -49,13 +58,7 @@ const getOrganizationSettingsTE = (organization_id: string) => TE.tryCatch<GetOr
     }),
 )
 
-const getOrganizationsCurrencyArray = (uniqueOrganizationIds: string[]) => pipe(
-    uniqueOrganizationIds,
-    A.map((organization_id) => getOrganizationSettingsTE(organization_id)),
-    A.sequence(TE.ApplicativePar),
-)
-
-const postPayPaymentTE = (payment_id: string, amount: number) => TE.tryCatch<PostPayPaymentError, PayPayment>(
+const postPayPaymentTE = (payment_id: string, amount: number): TE.TaskEither<PostPayPaymentError, PayPayment> => TE.tryCatch<PostPayPaymentError, PayPayment>(
     async () => {
         const client = axiosClient();
         const response = await client.post(`/payment/${payment_id}/pay`, { amount });
@@ -67,13 +70,19 @@ const postPayPaymentTE = (payment_id: string, amount: number) => TE.tryCatch<Pos
     }),
 )
 
-const payInvoicePayments = (payments: Payment[]) => pipe(
+const getOrganizationsCurrencyArray = (uniqueOrganizationIds: string[]): TE.TaskEither<GetOrganizationSettingsError, OrganizationSettings[]> => pipe(
+    uniqueOrganizationIds,
+    A.map((organization_id) => getOrganizationSettingsTE(organization_id)),
+    A.sequence(TE.ApplicativePar),
+)
+
+const payInvoicePayments = (payments: Payment[]): TE.TaskEither<PostPayPaymentError, PayPayment>[] => pipe(
     payments,
     A.filter((payment) => payment.status === "pending"),
     A.map((payment) => postPayPaymentTE(payment.id, payment.amount)),
 )
 
-const payAllInvoices = (invoices: Invoice[]) => pipe(
+const payAllInvoices = (invoices: Invoice[]): TE.TaskEither<PostPayPaymentError, PayPayment[]> => pipe(
     invoices,
     A.map((invoice) => payInvoicePayments(invoice.payments)),
     A.flatten,
@@ -84,19 +93,19 @@ const isCreditNote = (x: Invoice | CreditNote): x is CreditNote => x.type === "c
 
 const isInvoice = (x: Invoice | CreditNote): x is Invoice => x.type === "received";
 
-const separateInvoicesData = (invoicesData: Invoices) => pipe(
+const separateInvoicesData = (invoicesData: Invoices): Sep.Separated<Invoice[], CreditNote[]> => pipe(
     invoicesData,
     A.partition(isCreditNote),
     Sep.mapLeft(A.filter(isInvoice)),
 )
 
-const updateCreditNoteAmount = (creditNote: CreditNote, currency: Currency) => ({
+const updateCreditNoteAmount = (creditNote: CreditNote, currency: Currency): CreditNote => ({
     ...creditNote,
     currency,
     amount: convertAmount(creditNote.currency, currency, creditNote.amount),
 })
 
-const updateInvoiceAmounts = (invoice: Invoice, currency: Currency) => ({
+const updateInvoiceAmounts = (invoice: Invoice, currency: Currency): Invoice => ({
     ...invoice,
     currency,
     amount: convertAmount(invoice.currency, currency, invoice.amount),
@@ -108,28 +117,20 @@ const updateInvoiceAmounts = (invoice: Invoice, currency: Currency) => ({
     ),
 })
 
-const getUniqueOrganizationsIds = (invoices: Invoice[]) => pipe(
+const getUniqueOrganizationsIds = (invoices: Invoice[]): string[] => pipe(
     invoices,
     A.map((invoice) => invoice.organization_id),
     A.uniq(S.Eq),
 )
 
-const getOrganizations = (organizationsSettings: OrganizationSettings[]) => pipe(
+// TIPAR RETURN
+const getOrganizations = (organizationsSettings: OrganizationSettings[]): Record<string, Currency> => pipe(
     organizationsSettings,
-    A.map(({ organization_id, currency }) => [ organization_id, currency ] as const),
+    A.map(({ organization_id, currency }) => [organization_id, currency] as const),
     Object.fromEntries,
 )
 
-const EXCHANGE_RATES: Record<string, number> = {
-    "USD->CLP": 900,
-    "CLP->USD": 1 / 900,
-    "MXN->CLP": 60,
-    "CLP->MXN": 1 / 60,
-    "USD->MXN": 15,
-    "MXN->USD": 1 / 15,
-}
-
-const convertAmount = (from: Currency, to: Currency, amount: number) => pipe(
+const convertAmount = (from: Currency, to: Currency, amount: number): number => pipe(
     amount,
     O.fromPredicate(() => from === to),
     O.match(
@@ -138,17 +139,17 @@ const convertAmount = (from: Currency, to: Currency, amount: number) => pipe(
     ),
 )
 
-const byAmount = pipe(
+const byAmount: Ord.Ord<Payment> = pipe(
     N.Ord,
     Ord.contramap((payment: Payment) => payment.amount),
 )
 
-const sortInvoicePayments = (invoice: Invoice) => pipe(
+const sortInvoicePayments = (invoice: Invoice): Payment[] => pipe(
     invoice.payments,
     A.sort(byAmount),
 )
 
-const sortAllInvoicesPayments = (invoices: Invoice[]) => pipe(
+const sortAllInvoicesPayments = (invoices: Invoice[]): Invoice[] => pipe(
     invoices,
     A.map((invoice) => ({
         ...invoice,
@@ -157,15 +158,15 @@ const sortAllInvoicesPayments = (invoices: Invoice[]) => pipe(
     })),
 )
 
-const byStatusPending = (payment: Payment) => payment.status === "pending";
+const byStatusPending = (payment: Payment): boolean => payment.status === "pending";
 
 
-const removePaidInvoicePayments = (invoice: Invoice) => pipe(
+const removePaidInvoicePayments = (invoice: Invoice): Payment[] => pipe(
     invoice.payments,
     A.filter(byStatusPending),
 )
 
-const removeAllInvoicesPaidPayments = (invoices: Invoice[]) => pipe(
+const removeAllInvoicesPaidPayments = (invoices: Invoice[]): Invoice[] => pipe(
     invoices,
     A.map((invoice) => ({
         ...invoice,
@@ -174,27 +175,27 @@ const removeAllInvoicesPaidPayments = (invoices: Invoice[]) => pipe(
 )
 
 // REFACTORIZAR LÓGICA EN PIPES
-const applyDiscountToPayments = (payments: Payment[], discount: number) => pipe(
+const applyDiscountToPayments = (payments: Payment[], discount: number): Payment[] => pipe(
     payments,
     A.reduce({ remainingDiscount: discount, updatedPayments: [] as Payment[] }, ({ remainingDiscount, updatedPayments }, payment) => {
         if (remainingDiscount === 0) return {
             remainingDiscount,
-            updatedPayments: [ ...updatedPayments, payment ],
+            updatedPayments: [...updatedPayments, payment],
         }
         const discountToApply = Math.min(remainingDiscount, payment.amount);
         return {
             remainingDiscount: remainingDiscount - discountToApply,
-            updatedPayments: [ ...updatedPayments, {
+            updatedPayments: [...updatedPayments, {
                 ...payment,
                 status: payment.amount - discountToApply === 0 ? "paid" : payment.status,
                 amount: payment.amount - discountToApply,
-            } ],
+            }],
         };
     }),
     ({ updatedPayments }) => updatedPayments,
 )
 
-const selectInvoiceToApplyDiscount = (creditNote: CreditNote) => (invoice: Invoice) => pipe(
+const selectInvoiceToApplyDiscount = (creditNote: CreditNote) => (invoice: Invoice): Invoice => pipe(
     invoice,
     O.fromPredicate((invoice) => invoice.id === creditNote.reference),
     O.map((invoice) => ({
@@ -204,21 +205,21 @@ const selectInvoiceToApplyDiscount = (creditNote: CreditNote) => (invoice: Invoi
     O.getOrElse(() => invoice),
 )
 
-const applyCreditNoteToInvoices = (invoices: Invoice[], creditNote: CreditNote) => pipe(
+const applyCreditNoteToInvoices = (invoices: Invoice[], creditNote: CreditNote): Invoice[] => pipe(
     invoices,
     A.map(selectInvoiceToApplyDiscount(creditNote)),
 )
 
-const applyAllCreditNotes = (creditNotes: CreditNote[]) => (invoices: Invoice[]) => pipe(
+const applyAllCreditNotes = (creditNotes: CreditNote[]) => (invoices: Invoice[]): Invoice[] => pipe(
     creditNotes,
     A.reduce(invoices, (updatedInvoices, creditNote) => applyCreditNoteToInvoices(updatedInvoices, creditNote)),
-) 
+)
 
 const main = async () => {
     // OBTENER FACTURAS Y NOTAS DE CREDITO
     const invoicesData = await getInvoicesTE()();
 
-    if(E.isLeft(invoicesData)){
+    if (E.isLeft(invoicesData)) {
         console.log("Error fetching invoices:", invoicesData.left);
         return;
     }
@@ -229,7 +230,7 @@ const main = async () => {
     const uniqueOrganizationIds = getUniqueOrganizationsIds(invoices);
     const organizationsCurrency = await getOrganizationsCurrencyArray(uniqueOrganizationIds)();
 
-    if(E.isLeft(organizationsCurrency)){
+    if (E.isLeft(organizationsCurrency)) {
         console.log("Error building organizations currency array", organizationsCurrency);
         return;
     }
@@ -276,9 +277,10 @@ const main = async () => {
 
     console.log("Facturas con Pagos con Descuento Aplicado:", JSON.stringify(invoicesReady, null, 2));
 
+    // PAGAR TODAS LAS INVOICES
     const allInvoicesPaid = await payAllInvoices(invoicesReady)();
 
-    if(E.isLeft(allInvoicesPaid)){
+    if (E.isLeft(allInvoicesPaid)) {
         console.log("Error paying invoices payments");
         return;
     }

@@ -1,0 +1,33 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "commonjs",
+    "lib": ["es2022"],
+    "declaration": true,
+    "strict": true,
+    "noImplicitAny": true,
+    "strictNullChecks": true,
+    "noImplicitThis": true,
+    "alwaysStrict": true,
+    "noUnusedLocals": false,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "noUnusedParameters": false,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": false,
+    "inlineSourceMap": true,
+    "inlineSources": true,
+    "experimentalDecorators": true,
+    "strictPropertyInitialization": false,
+    "incremental": true,
+    "outDir": "dist",
+    "esModuleInterop": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/inputs": ["api/src/input.ts"],
+      "@/services/": ["api/src/services/"],
+      "@src/": ["api/src/"]
+    }
+  },
+  "exclude": ["node_modules", "cdk.out", "dist"]
+}
